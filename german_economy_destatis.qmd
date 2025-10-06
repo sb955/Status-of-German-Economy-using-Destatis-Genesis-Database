@@ -1,0 +1,193 @@
+---
+title: "German economy analysis using the Destatis Genesis database in R"
+format: 
+  html:
+    embed-resources: true 
+editor: visual
+execute:
+  echo: true
+  warning: false
+  message: false
+  
+---
+
+
+
+```{r setup}
+# Pakete laden
+library(ggplot2)
+library(dplyr)
+library(restatis)
+
+# Authentication (einmalig speichern)
+#gen_auth_save("genesis", use_token = TRUE) 
+
+```
+
+# BIP Analysis
+
+## BIP Development
+
+```{r}
+
+bip_raw <- gen_table("81000-0001", database = "genesis",  silent = TRUE)
+
+bip_nominal <- bip_raw |>
+  filter(value_variable_code == "VGR014",
+         value_unit == "unit app.",
+         `2_variable_attribute_label` == "At current prices (bn EUR)") |>
+  mutate(time = as.integer(time),
+         value = as.numeric(value)) |>
+  select(time, value) |>
+  rename(nominal = value)
+
+bip_real <- bip_raw |>
+  filter(value_variable_code == "VGR014",
+         value_unit == "unit app.",
+         `2_variable_attribute_label` == "Price-adjusted, chain-linked volume data (bn EUR)") |>
+  mutate(time = as.integer(time),
+         value = as.numeric(value)) |>
+  select(time, value) |>
+  rename(real = value)
+
+bip_combined <- full_join(bip_nominal, bip_real, by = "time")
+
+ggplot(bip_combined, aes(x = time)) +
+  geom_line(aes(y = nominal, color = "Nominal"), linewidth = 1.2) +
+  geom_line(aes(y = real, color = "Real"), linewidth = 1.2) +
+  labs(title = "GDP Germany",
+       x = "Year",
+       y = "GDP in bn EUR",
+       color = "BIP type") +
+  theme_minimal() +
+  scale_color_manual(values = c("Nominal" = "blue", "Real" = "red"))
+```
+
+## BIP Growth Rate
+
+```{r}
+bip_growth <- bip_combined |>
+  arrange(time) |>
+  mutate(nominal_growth = (nominal / lag(nominal) - 1) * 100,
+         real_growth = (real / lag(real) - 1) * 100)
+
+ggplot(bip_growth, aes(x = time)) +
+  geom_line(aes(y = nominal_growth, color = "Nominal Growth"), linewidth = 1.2) +
+  geom_line(aes(y = real_growth, color = "Real Growth"), linewidth = 1.2) +
+  labs(title = "GDP Growth Rate of Germany",
+       x = "Year",
+       y = "Growth Rate in %",
+       color = "Growth Type") +
+  theme_minimal() +
+  scale_color_manual(values = c("Nominal Growth" = "blue", "Real Growth" = "red"))
+```
+## BIP per Capita
+
+```{r}
+population_raw <- gen_table("12411-0002", database = "genesis")
+population <- population_raw |>
+  filter(value_variable_code == "BEVSTD",
+         value_unit == "number",
+         `2_variable_attribute_label` == "Total",
+         time >= 1991) |>
+  # Zeit in Jahr extrahieren
+  mutate(time = as.integer(substr(time, 1, 4)),
+         value = as.numeric(value) * 1000) |>
+  select(time, value) |>
+  rename(population = value)
+
+bip_per_capita_real <- full_join(bip_combined, population, by = "time") |>
+  mutate(bip_per_capita_real = (real * 1e9) / population)
+
+bip_per_capita_nominal <- full_join(bip_combined, population, by = "time") |>
+  mutate(bip_per_capita_nominal = (nominal * 1e9) / population)
+
+bip_per_capita_combined <- full_join(bip_per_capita_nominal |> select(time, bip_per_capita_nominal),
+                                       bip_per_capita_real |> select(time, bip_per_capita_real),
+                                       by = "time")
+
+ggplot(bip_per_capita_combined, aes(x = time)) +
+  geom_line(aes(y = bip_per_capita_nominal, color = "Nominal per Capita"), linewidth = 1.2) +
+  geom_line(aes(y = bip_per_capita_real, color = "Real per Capita"), linewidth = 1.2) +
+  labs(title = "GDP per Capita in Germany",
+       x = "Year",
+       y = "GDP per Capita €",
+       color = "GDP Type") +
+  theme_minimal() +
+  scale_color_manual(values = c("Nominal per Capita" = "blue", "Real per Capita" = "red"))
+```
+
+## Consumer price index
+
+```{r}
+cpi_raw <- gen_table("61111-0001", database = "genesis")
+cpi_rate <- cpi_raw |>
+  filter(value_unit == "%") |>
+  mutate(
+    time = as.integer(time),
+    cpi_rate = as.numeric(value)
+  ) |>
+  filter(time >= 1992) |>
+  select(time, cpi_rate)
+
+ggplot(cpi_rate, aes(x = time, y = cpi_rate)) +
+  geom_line(color = "darkgreen", linewidth = 1.2) +
+  labs(title = "CPI",
+       x = "Jahr",
+       y = "CPI in %") +
+  theme_minimal()
+```
+
+# Industry
+
+## Gross Value Added by Sector
+
+```{r}
+industry_raw <- gen_table("81000-0013", database = "genesis")
+
+industry <- industry_raw |>
+  filter(value_unit == "unit app.",
+         `2_variable_attribute_label`== "Price-adjusted, chain-linked volume data (bn EUR)") |>   
+  mutate(
+    time = as.integer(time),
+    value = as.numeric(value)
+  ) |>
+  select(time, `3_variable_attribute_label`, value) |>
+  rename(sector = `3_variable_attribute_label`,
+         gva_real = value)
+
+#sectors_selected <- c("Produzierendes Gewerbe", "Baugewerbe", "Handel; Gastgewerbe; Verkehr, Information und Kommunikation", "Öffentliche Dienstleister, Erziehung, Gesundheit")
+
+#industry_selected <- industry |>
+  #filter(sector %in% sectors_selected)
+
+ggplot(industry, aes(x = time, y = gva_real, color = sector)) +
+  geom_line(linewidth = 1.2) +
+  labs(title = "Gross Value Added by Sector (Real Terms)",
+       x = "Year",
+       y = "BWS in bn EUR",
+       color = "Sector") +
+  theme_minimal()
+
+```
+
+## Real Growth Rate by Sector
+
+```{r}
+industry_growth <- industry |>
+  arrange(sector, time) |>
+  filter(time >= 1992) |>
+  group_by(sector) |>
+  mutate(gva_growth = (gva_real / lag(gva_real) - 1) * 100) |>
+  ungroup()
+
+ggplot(industry_growth, aes(x = time, y = gva_growth, color = sector)) +
+  geom_line(linewidth = 1.2) +
+  labs(title = "Real Growth Rate by Sector",
+       x = "Year",
+       y = "Growth Rate in %",
+       color = "Sector") +
+  # horizontal line
+  geom_hline(yintercept = 1, linetype = "dashed", color = "black") +
+  theme_minimal()
+```
